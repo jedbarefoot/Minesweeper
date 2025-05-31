@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import font
+from tkinter import messagebox
 import random
 from minesweeperAgent import MinesweeperSolver
 
@@ -108,6 +109,7 @@ class MinesweeperGUI:
         game_menu.add_command(label="Beginner", command=lambda: self.set_difficulty(9, 9, 10))
         game_menu.add_command(label="Intermediate", command=lambda: self.set_difficulty(16, 16, 40))
         game_menu.add_command(label="Expert", command=lambda: self.set_difficulty(16, 30, 99))
+        game_menu.add_command(label="Custom", command=self.open_custom_game_dialog)
 
         # Create "Solver" menu
         solver_menu = tk.Menu(menu_bar, tearoff=0)
@@ -181,6 +183,9 @@ class MinesweeperGUI:
         )
         self.timer_label.grid(row=0, column=2, sticky='e', padx=(0, 15))
 
+        self.solver_running = False
+        self.solver_job = None  # Track the .after job
+        self.timer_running = False  # <--- ADD THIS HERE
 
         self.flags = set()
         self.remaining_mines = self.game.num_mines
@@ -192,20 +197,23 @@ class MinesweeperGUI:
         self.board_frame = tk.Frame(self.container)  # Game board under header
         self.board_frame.pack()
 
+        self.buttons = [[None for _ in range(self.cols)] for _ in range(self.rows)]
+
         for r in range(self.rows):
             for c in range(self.cols):
                 btn = tk.Button(
                     self.board_frame,
-                    width=4, height=2,
+                    width=2, height=1,
                     bg='lightgray',
-                    font=self.tile_font,
+                    font=("Fira Mono", 14, "bold"),
                     relief='raised',
                     bd=2,
                     padx=0,
                     pady=0,
-                    anchor='center'
+                    anchor='center',
+                    highlightthickness=0   
                 )
-                btn.grid(row=r, column=c, padx=1, pady=1)
+                btn.grid(row=r, column=c, padx=0, pady=0)
                 btn.config(command=lambda r=r, c=c: self.on_click(r, c))
                 btn.bind("<Button-3>", lambda e, r=r, c=c: self.on_right_click(r, c))
                 self.buttons[r][c] = btn
@@ -213,6 +221,10 @@ class MinesweeperGUI:
     def on_click(self, r, c):
         if self.game_over or (r, c) in self.flags:
             return
+        
+        if not self.timer_running and not self.game_over:
+            self.timer_running = True
+            self.update_timer()
 
         result = self.game.click_tile(r, c)
 
@@ -231,7 +243,10 @@ class MinesweeperGUI:
                         bg='#B0B0B0',
                         relief='sunken',
                         fg=color,
-                        font=self.tile_font
+                        font=("Fira Mono", 14, "bold"),  # MATCH the create_board font
+                        padx=0,
+                        pady=0,
+                        bd=2
                     )
 
         if self.game.is_win():
@@ -255,7 +270,7 @@ class MinesweeperGUI:
         self.update_mine_counter()
 
     def update_timer(self):
-        if self.game_over:
+        if self.game_over or not self.timer_running:
             return
         self.timer_label.config(text=f"{self.time_elapsed:03}")
         self.time_elapsed += 1
@@ -289,7 +304,13 @@ class MinesweeperGUI:
                     state='normal'
                 )
 
+        self.solver_running = False
+        if self.solver_job:
+            self.master.after_cancel(self.solver_job)
+            self.solver_job = None
+
         self.game_over = False
+        self.timer_running = False
         self.update_timer()
         self.reset_button.config(text='😐')
 
@@ -299,18 +320,23 @@ class MinesweeperGUI:
     def end_game(self):
         self.game_over = True
 
-        # Stop timer
-        self.master.after_cancel(self.timer_job)
+        # Stop both the timer and the solver
+        if hasattr(self, 'timer_job'):
+            self.master.after_cancel(self.timer_job)
+        if hasattr(self, 'solver_job') and self.solver_job:
+            self.master.after_cancel(self.solver_job)
+            self.solver_job = None
+        self.timer_running = False
+        self.solver_running = False
 
         # Show all mines
         for r in range(self.rows):
             for c in range(self.cols):
                 if self.game.game_board[r][c] == 'M':
-                    self.buttons[r][c].config(text='M', bg='red', fg='black', relief='sunken')
+                    self.buttons[r][c].config(text='\U0001F4A3', bg='red', fg='black', relief='sunken')
 
         # Change face
         self.reset_button.config(text='😵')
-
         # Disable all buttons (clicks will be ignored via self.game_over)
 
     def set_difficulty(self, rows, cols, mines):
@@ -333,30 +359,39 @@ class MinesweeperGUI:
         self.timer_label.config(text='000')
         self.reset_button.config(text='😐')
 
+        self.solver_running = False
+        if self.solver_job:
+            self.master.after_cancel(self.solver_job)
+            self.solver_job = None
+
         self.create_board()
+        self.timer_running = False
         self.update_timer()
 
     def run_solver(self):
-        if self.game_over:
+        if self.game_over or self.solver_running:
             return
 
+        self.timer_running = False
+        self.solver_running = True
         self.solver = MinesweeperSolver(self.game)
         no_progress_counter = [0]
         action_queue = []
+        action_delay = 100  # ms
 
         def queue_actions(safe_moves, flags):
-            # Queue flag placements
             for r, c in flags:
                 if (r, c) not in self.flags:
                     action_queue.append(("flag", r, c))
-
-            # Queue safe moves
             for r, c in safe_moves:
                 if self.game.view_board[r][c] == ' ' and (r, c) not in self.flags:
                     action_queue.append(("click", r, c))
 
         def perform_next_action():
             if self.game_over or self.game.is_win():
+                self.solver_running = False
+                self.timer_running = True
+                self.update_timer()
                 return
 
             if not action_queue:
@@ -368,9 +403,12 @@ class MinesweeperGUI:
 
                 if no_progress_counter[0] < 2:
                     queue_actions(safe_moves, flags)
-                    self.master.after(100, perform_next_action)
+                    self.solver_job = self.master.after(100, perform_next_action)
                 else:
                     print("Solver stuck — no new moves.")
+                    self.solver_running = False
+                    self.timer_running = True
+                    self.update_timer()
                 return
 
             action, r, c = action_queue.pop(0)
@@ -380,13 +418,17 @@ class MinesweeperGUI:
                 self.remaining_mines -= 1
                 self.buttons[r][c].config(text='🚩', fg='red', bg='lightgray')
                 self.update_mine_counter()
+                self.solver_job = self.master.after(action_delay, perform_next_action)
+
             elif action == "click":
                 self.buttons[r][c].config(bg='yellow')
-                self.master.after(200, lambda r=r, c=c: self.on_click(r, c))
+                def click_and_continue(r, c):
+                    self.on_click(r, c)
+                    self.solver_job = self.master.after(action_delay, perform_next_action)
 
-            self.master.after(action_delay, perform_next_action)  # Half-second delay after each action
+                self.solver_job = self.master.after(200, lambda r=r, c=c: click_and_continue(r, c))
 
-         # Make the first click if nothing has been revealed
+        # Initial check: if nothing revealed, make first click
         revealed = any(
             self.game.view_board[r][c] != ' '
             for r in range(self.rows)
@@ -395,9 +437,43 @@ class MinesweeperGUI:
         if not revealed:
             start_r, start_c = self.rows // 2, self.cols // 2
             self.on_click(start_r, start_c)
-            self.master.after(500, perform_next_action)
+            self.solver_job = self.master.after(500, perform_next_action)
         else:
             perform_next_action()
+
+    def open_custom_game_dialog(self):
+        popup = tk.Toplevel(self.master)
+        popup.title("Custom Game")
+
+        tk.Label(popup, text="Rows (max 50):").grid(row=0, column=0, padx=10, pady=5, sticky="e")
+        tk.Label(popup, text="Columns (max 50):").grid(row=1, column=0, padx=10, pady=5, sticky="e")
+        tk.Label(popup, text="Mines (≤ 50% of board):").grid(row=2, column=0, padx=10, pady=5, sticky="e")
+
+        row_entry = tk.Entry(popup)
+        col_entry = tk.Entry(popup)
+        mine_entry = tk.Entry(popup)
+        row_entry.grid(row=0, column=1, pady=5)
+        col_entry.grid(row=1, column=1, pady=5)
+        mine_entry.grid(row=2, column=1, pady=5)
+
+        def start_custom_game():
+            try:
+                rows = int(row_entry.get())
+                cols = int(col_entry.get())
+                mines = int(mine_entry.get())
+
+                if not (1 <= rows <= 200 and 1 <= cols <= 50):
+                    raise ValueError("Rows and columns must be between 1 and 50.")
+                if mines < 1 or mines > (rows * cols) // 2:
+                    raise ValueError("Mines must be no more than 50% of total cells.")
+
+                popup.destroy()
+                self.set_difficulty(rows, cols, mines)
+
+            except ValueError as e:
+                tk.messagebox.showerror("Invalid Input", str(e))
+
+        tk.Button(popup, text="Start", command=start_custom_game).grid(row=3, column=0, columnspan=2, pady=10)
 
 # --- Run the app ---
 if __name__ == "__main__":

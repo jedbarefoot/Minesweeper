@@ -18,73 +18,53 @@ class MinesweeperSolver:
         new_flags = set()
         constraints = []
 
-        # Step 1: Collect local constraints from number cells
         for r in range(self.rows):
             for c in range(self.cols):
                 cell = self.game.view_board[r][c]
                 if not cell.isdigit() or int(cell) == 0:
                     continue
 
+                number = int(cell)
                 neighbors = self.get_neighbors(r, c)
-                unknown = set(
-                    (nr, nc)
-                    for (nr, nc) in neighbors
-                    if self.game.view_board[nr][nc] == ' ' and (nr, nc) not in self.known_flags
-                )
-                flagged = set(
-                    (nr, nc)
-                    for (nr, nc) in neighbors
-                    if (nr, nc) in self.known_flags
-                )
+                flagged = [n for n in neighbors if n in self.known_flags]
+                unknown = [
+                    n for n in neighbors
+                    if self.game.view_board[n[0]][n[1]] == ' ' and n not in self.known_flags
+                ]
 
-                remaining_mines = int(cell) - len(flagged)
-                if remaining_mines < 0:
-                    continue  # too many flags (user error), skip
-
-                if not unknown:
-                    continue
-
-                # Basic rules
+                remaining_mines = number - len(flagged)
                 if remaining_mines == 0:
                     safe_moves.update(unknown)
                 elif remaining_mines == len(unknown):
                     new_flags.update(unknown)
-                else:
-                    constraints.append({
-                        'source': (r, c),
-                        'cells': unknown,
-                        'count': remaining_mines
-                    })
+                elif unknown:
+                    constraints.append((set(unknown), remaining_mines))
 
-        # Step 2: Subset inference
-        for i, c1 in enumerate(constraints):
-            for j, c2 in enumerate(constraints):
+        # Subset-based inference
+        for i in range(len(constraints)):
+            cells_i, count_i = constraints[i]
+            for j in range(len(constraints)):
                 if i == j:
                     continue
-                # If c1 is a subset of c2
-                if c1['cells'].issubset(c2['cells']):
-                    diff = c2['cells'] - c1['cells']
-                    diff_count = c2['count'] - c1['count']
+                cells_j, count_j = constraints[j]
+
+                # Check if i is a subset of j
+                if cells_i < cells_j:
+                    diff_cells = cells_j - cells_i
+                    diff_count = count_j - count_i
                     if diff_count == 0:
-                        safe_moves.update(diff)
-                    elif diff_count == len(diff):
-                        new_flags.update(diff)
+                        safe_moves.update(diff_cells)
+                    elif diff_count == len(diff_cells):
+                        new_flags.update(diff_cells)
 
-        # Step 3: Disjoint pair inference
-        for i, c1 in enumerate(constraints):
-            for j, c2 in enumerate(constraints):
-                if i == j:
-                    continue
-                if c1['cells'].isdisjoint(c2['cells']):
-                    combined_cells = c1['cells'] | c2['cells']
-                    combined_count = c1['count'] + c2['count']
-                    for k, c3 in enumerate(constraints):
-                        if k == i or k == j:
-                            continue
-                        if c3['cells'] >= combined_cells and c3['count'] == combined_count:
-                            leftover = c3['cells'] - combined_cells
-                            if leftover:
-                                safe_moves.update(leftover)
+                # Or j is a subset of i
+                elif cells_j < cells_i:
+                    diff_cells = cells_i - cells_j
+                    diff_count = count_i - count_j
+                    if diff_count == 0:
+                        safe_moves.update(diff_cells)
+                    elif diff_count == len(diff_cells):
+                        new_flags.update(diff_cells)
 
         return list(safe_moves), new_flags
 
@@ -100,8 +80,8 @@ class MinesweeperSolver:
     def make_moves(self):
         """Returns a tuple: (list of safe moves to click, list of flags to place)"""
         safe_moves, to_flag = self.analyze_board()
-        print("Moves: ", safe_moves)
-        print("Flags: ", list(to_flag))
+        #print("Moves: ", safe_moves)
+        #print("Flags: ", list(to_flag))
         for pos in to_flag:
             self.known_flags.add(pos)
         return safe_moves, list(to_flag)
